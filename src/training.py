@@ -82,6 +82,11 @@ class TrainConfig:
     l2_w:            float = 1e-6
     grad_clip:       float = 10.0
     device:          str   = "cpu"
+    # early stopping: halt when p_miss==0 for this many consecutive updates
+    # and restore weights from rollback_steps before the first zero-miss update.
+    # set stop_on_no_miss=0 to disable.
+    stop_on_no_miss:  int  = 3
+    rollback_steps:   int  = 5
 
 
 # ------------------------------------------------------------------ train loop
@@ -89,8 +94,17 @@ class TrainConfig:
 def train_supervised(model, env_fn, cfg: TrainConfig):
     """
     Supervised training with masked temporal cross-entropy + L2 reg.
+
+    Early stopping logic (when cfg.stop_on_no_miss > 0):
+        - keeps a rolling buffer of the last rollback_steps checkpoints
+        - when p_miss == 0 for stop_on_no_miss consecutive updates,
+          restores weights from rollback_steps before the first zero-miss hit
+        - this preserves miss trials in the final model
+
     Returns history dict (loss, ce, reg, p_correct, p_abort, p_miss).
     """
+    import copy
+    from collections import deque
     from src.dataset import make_train_batch
 
     model.to(cfg.device)
@@ -98,8 +112,19 @@ def train_supervised(model, env_fn, cfg: TrainConfig):
 
     history = {k: [] for k in ("loss", "ce", "reg", "p_correct", "p_abort", "p_miss")}
 
+    # rolling buffer of state_dicts, length = rollback_steps
+    # index 0 = oldest, -1 = most recent
+    use_early_stop = cfg.stop_on_no_miss > 0
+    checkpoint_buf = deque(maxlen=cfg.rollback_steps) if use_early_stop else None
+    zero_miss_streak = 0   # how many consecutive updates had p_miss == 0
+    first_zero_miss_upd = None
+
     for upd in range(1, cfg.max_updates + 1):
         model.train()
+
+        # save checkpoint before this update (so buf[-1] is always current weights)
+        if use_early_stop:
+            checkpoint_buf.append(copy.deepcopy(model.state_dict()))
 
         x, y, mask, lengths = make_train_batch(
             env_fn=env_fn,
@@ -138,5 +163,29 @@ def train_supervised(model, env_fn, cfg: TrainConfig):
                 f"p_abort {stats['abort']:.2f}  p_miss {stats['miss']:.2f}  "
                 f"p_corr {stats['correct']:.2f}"
             )
+
+        # early stopping check
+        if use_early_stop:
+            if stats["miss"] == 0.0:
+                if zero_miss_streak == 0:
+                    first_zero_miss_upd = upd
+                zero_miss_streak += 1
+            else:
+                zero_miss_streak = 0
+                first_zero_miss_upd = None
+
+            if zero_miss_streak >= cfg.stop_on_no_miss:
+                # checkpoint_buf[0] is the oldest saved state — that's rollback_steps
+                # before the current update (or as far back as we have)
+                restore_state = checkpoint_buf[0]
+                model.load_state_dict(restore_state)
+                actual_rollback = min(len(checkpoint_buf), cfg.rollback_steps)
+                print(
+                    f"\nEarly stop at upd {upd}: p_miss==0 for {zero_miss_streak} "
+                    f"consecutive updates (first at upd {first_zero_miss_upd}).\n"
+                    f"Restored weights from {actual_rollback} steps before "
+                    f"(upd ~{upd - actual_rollback})."
+                )
+                break
 
     return history
