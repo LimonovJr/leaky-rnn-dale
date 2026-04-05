@@ -87,6 +87,7 @@ class TrainConfig:
     # set stop_on_no_miss=0 to disable.
     stop_on_no_miss:  int  = 3
     rollback_steps:   int  = 5
+    warmup_updates:   int  = 500  # don't check early stopping for first N updates
 
 
 # ------------------------------------------------------------------ train loop
@@ -164,8 +165,8 @@ def train_supervised(model, env_fn, cfg: TrainConfig):
                 f"p_corr {stats['correct']:.2f}"
             )
 
-        # early stopping check
-        if use_early_stop:
+        # early stopping check (skip warmup period)
+        if use_early_stop and upd > cfg.warmup_updates:
             if stats["miss"] == 0.0:
                 if zero_miss_streak == 0:
                     first_zero_miss_upd = upd
