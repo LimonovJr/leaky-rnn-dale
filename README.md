@@ -38,9 +38,9 @@ Trial structure: **fixation** → **cue** (350 ms) → **delay/CTOA** (Beta(2.2,
 |-------|---------------|----------------|---------|----------------|
 | 0 | 0.0 | 0.0 | 1 000 | off |
 | 1 | 1.0 | 0.0 | 1 000 | off |
-| 2 | 1.0 | 0.6 | up to 8 700 | on (default) |
+| 2 | 1.0 | 0.6 | until early stop | on (default) |
 
-Early stopping in stage 2: halts when `p_miss == 0` for 3 consecutive print-steps, restores weights from 5 steps back. In practice training stops well before 8 700 updates.
+Early stopping in stage 2: halts when `p_miss == 0` for 3 consecutive print-steps, restores weights from 5 steps back.
 
 ---
 
