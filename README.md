@@ -1,8 +1,7 @@
 # Leaky RNN with Dale's Law — V3
 
-Biologically-constrained leaky RNN trained on a cued visuospatial detection task
-with distractors. Implements E/I split, Dale's law, sparse masks, and
-article-style recurrent noise scaling.
+Biologically-constrained leaky RNN trained on a cued visuospatial detection task with distractors.
+Implements E/I split, Dale's law, sparse masks, and recurrent noise scaling.
 
 ---
 
@@ -10,78 +9,52 @@ article-style recurrent noise scaling.
 
 ```
 h_{t+1} = (1 - α) h_t + α · φ(W_rec_eff h_t + W_in_eff x_t + b_h + ξ_t)
-y_t     = W_out_eff h_t + b_out
-
-α       = dt / τ
-ξ_t     ~ N(0, σ_eff²),   σ_eff = √(2/α) · σ_rec
+α = dt / τ,   ξ_t ~ N(0, σ_eff²),   σ_eff = √(2/α) · σ_rec
 ```
 
-Dale's law: `W_rec` stores unsigned magnitudes; a fixed `ei_sign` vector
-(+1 / −1) multiplied per sender column enforces sign constraints throughout training.
+Dale's law: `W_rec` stores unsigned magnitudes; a fixed `ei_sign` vector (+1/−1) enforces sign constraints per sender column throughout training.
 
 ---
 
 ## Task: `CuedTargetWithDistractorsV3`
 
-| Obs channel | Meaning |
-|-------------|---------|
+Observation space `(7,)`:
+
+| Channel | Meaning |
+|---------|---------|
 | 0 | fixation |
 | 1 | cue_on |
-| 2–3 | cue (x, y) — near-central, scaled by `cue_strength` |
+| 2–3 | cue (x, y) — near-central (±0.4), scaled by `cue_strength` |
 | 4 | stim_on |
-| 5–6 | stimulus (x, y) — peripheral, scaled by `target/distractor_strength` |
+| 5–6 | stimulus (x, y) — peripheral (±1.0), scaled by strength |
 
-**V3 vs V2:** continuous spatial coordinates replace one-hot location channels.
-4 locations defined by quadrant (±1, ±1); cue uses inner coordinates (±0.4, ±0.4).
-
-| Period | Duration |
-|--------|----------|
-| Fixation | jitter ~ U(700, 1200) ms |
-| Cue | 350 ms |
-| Delay (CTOA) | Beta(2.2, 1.6) → [1000, 3300] ms |
-| Target | 100 ms |
-| Post-target | 900 ms |
+Trial structure: **fixation** → **cue** (350 ms) → **delay/CTOA** (Beta(2.2,1.6) → [1000, 3300] ms) → **target** (100 ms) → **post-target** (900 ms).
 
 ---
 
-## Training stages
+## Training curriculum
 
-| Stage | `cue_strength` | `p_distractor` | Updates |
-|-------|---------------|----------------|---------|
-| 0 | 0.0 | 0.0 | 1 000 |
-| 1 | 1.0 | 0.0 | 1 000 |
-| 2 | 1.0 | 0.6 | 8 700 |
+| Stage | `cue_strength` | `p_distractor` | Updates | Early stopping |
+|-------|---------------|----------------|---------|----------------|
+| 0 | 0.0 | 0.0 | 1 000 | off |
+| 1 | 1.0 | 0.0 | 1 000 | off |
+| 2 | 1.0 | 0.6 | 8 700 | on (default) |
+
+Early stopping in stage 2: halts when `p_miss == 0` for 3 consecutive print-steps, restores weights from 5 steps back.
 
 ---
 
 ## Installation
 
 ```bash
-git clone https://github.com/<your-username>/leaky-rnn-dale.git
-cd leaky-rnn-dale
-pip install -r requirements.txt
+conda create -n rnn-env python=3.10 -y
+conda activate rnn-env
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install neurogym @ git+https://github.com/neurogym/neurogym.git
+pip install numpy matplotlib scikit-learn
 ```
 
----
-
-## Quick start
-
-```python
-import torch
-from src import BioLeakyRNN, CuedTargetWithDistractorsV3, TrainConfig, train_supervised
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-model = BioLeakyRNN(input_size=7, hidden_size=128, output_size=2,
-                    dt=20.0, tau=100.0, use_ei=True, use_dale=True,
-                    mask_seed=42).to(device)
-
-def make_env(): return CuedTargetWithDistractorsV3(dt=20, cue_strength=0.0)
-
-history = train_supervised(model, make_env,
-                           TrainConfig(max_updates=1000, device=device))
-torch.save({'state_dict': model.state_dict()}, 'checkpoints/stage0.pt')
-```
+> **Note:** for `hidden_size=128` / `batch_size=64`, CPU is faster than GPU — training runs on `device = 'cpu'` by default.
 
 ---
 
@@ -92,22 +65,13 @@ leaky-rnn-dale/
 ├── src/
 │   ├── env.py        — CuedTargetWithDistractorsV3
 │   ├── model.py      — BioLeakyRNN
-│   ├── training.py   — losses, train loop, TrainConfig
+│   ├── training.py   — TrainConfig, train_supervised (with early stopping)
 │   ├── dataset.py    — rollout, batch factory
-│   ├── analysis.py   — PCA, dPCA, spatial separation, trial collection
-│   └── plotting.py   — visualisation
+│   ├── analysis.py   — collect_trials, PCA, dPCA, spatial separation
+│   └── plotting.py   — visualisation helpers
 ├── notebooks/
-│   ├── 01_train.ipynb
-│   └── 02_analysis.ipynb
+│   ├── 01_train.ipynb   — 3-stage curriculum training
+│   └── 02_analysis.ipynb — PCA, dPCA, spatial analysis
 ├── checkpoints/      (.gitignored)
-├── requirements.txt
-└── README.md
+└── requirements.txt
 ```
-
----
-
-## References
-
-- Mante et al. (2013). Context-dependent computation by recurrent dynamics. *Nature*.
-- Perez-Nieves et al. (2021). Neural heterogeneity promotes robust learning. *Nat. Commun.*
-- NeuroGym: https://github.com/neurogym/neurogym
