@@ -247,6 +247,54 @@ def plot_dpca_components(res, component_key="Z_cond", explained_key="explained_c
     print(f"Explained variance ({title_prefix}):", res[explained_key][:n_plot])
 
 
+def plot_dpca_components_with_band(res, by_label, component_key="Z_cond",
+                                    explained_key="explained_cond", label_key="labels",
+                                    n_plot=3, title_prefix="cond",
+                                    align_label="target_onset",
+                                    q_low=25, q_high=75):
+    """
+    Like plot_dpca_components but adds per-trial percentile bands.
+    by_label: dict[label -> np.ndarray [N, T, H]] from collect_aligned_hidden_by_label.
+    """
+    rel_time = res["rel_time"]
+    Z        = res[component_key]   # [C, T, K]
+    labels   = res[label_key]
+    pca_key  = "pca_cond" if "cond" in component_key else "pca_time"
+    pca      = res[pca_key]
+
+    # grand mean for centering individual trials before projection
+    all_h = np.concatenate([by_label[lab] for lab in labels if lab in by_label], axis=0)
+    grand = all_h.mean(axis=(0, 1), keepdims=True)   # [1, 1, H]
+
+    colors = plt.cm.tab10(np.linspace(0, 1, max(len(labels), 1)))
+
+    fig, axes = plt.subplots(1, n_plot, figsize=(5 * n_plot, 4), sharex=True)
+    if n_plot == 1:
+        axes = [axes]
+
+    for k in range(n_plot):
+        ax = axes[k]
+        for i, lab in enumerate(labels):
+            col = colors[i]
+            ax.plot(rel_time, Z[i, :, k], color=col, label=str(lab), lw=1.5)
+            if lab in by_label:
+                h = by_label[lab] - grand           # [N, T, H]
+                N, T, H = h.shape
+                proj = pca.transform(h.reshape(N * T, H)).reshape(N, T, -1)
+                lo = np.percentile(proj[:, :, k], q_low,  axis=0)
+                hi = np.percentile(proj[:, :, k], q_high, axis=0)
+                ax.fill_between(rel_time, lo, hi, alpha=0.10, color=col)
+        ax.axvline(0, linestyle="--")
+        ax.set_title(f"{title_prefix}-dPC{k+1}")
+        ax.set_xlabel(f"time from {align_label}")
+        ax.set_ylabel("component")
+
+    axes[0].legend(fontsize=7, ncol=2)
+    plt.tight_layout()
+    plt.show()
+    print(f"Explained variance ({title_prefix}):", res[explained_key][:n_plot])
+
+
 def plot_dpca_plane(res, component_key="Z_cond", label_key="labels",
                     xlabel="cond-dPC1", ylabel="cond-dPC2",
                     title="Condition-demixed trajectories"):
