@@ -26,6 +26,18 @@ def masked_temporal_cross_entropy(logits, targets, mask):
     return (loss * mask).sum() / mask.sum().clamp_min(1.0)
 
 
+def masked_spatial_mse(pred_xy, true_xy, mask):
+    """
+    Mean-squared-error spatial loss, masked over time.
+        pred_xy  [B, T, 2]
+        true_xy  [B, T, 2]
+        mask     [B, T]       1 inside the window where aux loss applies
+    Returns scalar mean per-timestep Euclidean-squared error.
+    """
+    sq = (pred_xy - true_xy).pow(2).sum(dim=-1)    # [B, T]
+    return (sq * mask).sum() / mask.sum().clamp_min(1.0)
+
+
 def l2_activity_and_weight_penalty(h_seq, model, l2_h=1e-6, l2_w=1e-6):
     """h_seq [B,T,H] -> scalar regularisation term"""
     reg = l2_h * h_seq.pow(2).mean()
@@ -44,14 +56,21 @@ def decode_actions(logits):
 
 
 @torch.no_grad()
-def compute_trial_outcomes(pred_actions, target_actions, lengths):
+def compute_trial_outcomes(pred_actions, target_actions, lengths, fa_window=None):
     """
     Returns dict with fractional correct / abort / miss.
     correct: first release inside true release window
     abort:   first release outside window
     miss:    no release
+
+    If fa_window is provided, also reports:
+    fa_rate: fraction of distractor-bearing trials where any release
+             landed inside a distractor FA window (NaN if no such trials).
+    n_distractor_trials: count of trials with ≥1 distractor FA window.
     """
     stats = {"correct": 0, "miss": 0, "abort": 0}
+    trials_with_distr = 0
+    trials_with_fa    = 0
 
     for b in range(pred_actions.shape[0]):
         T  = int(lengths[b])
@@ -65,8 +84,18 @@ def compute_trial_outcomes(pred_actions, target_actions, lengths):
             t_rel = int(first_release[0])
             stats["correct" if ta[t_rel] == 1 else "abort"] += 1
 
+        if fa_window is not None:
+            fa = fa_window[b, :T].cpu().numpy()
+            if (fa > 0).any():
+                trials_with_distr += 1
+                if ((pa == 1) & (fa > 0)).any():
+                    trials_with_fa += 1
+
     total = sum(stats.values())
-    return {k: v / total for k, v in stats.items()} if total > 0 else stats
+    out = {k: v / total for k, v in stats.items()} if total > 0 else dict(stats)
+    out["n_distractor_trials"] = trials_with_distr
+    out["fa_rate"] = (trials_with_fa / trials_with_distr) if trials_with_distr > 0 else float("nan")
+    return out
 
 
 # ------------------------------------------------------------------ config
@@ -83,6 +112,8 @@ class TrainConfig:
     l2_h:            float = 1e-6
     l2_w:            float = 1e-6
     grad_clip:       float = 10.0
+    fa_penalty_weight: float = 0.4   # weight on release-probability penalty inside distractor FA windows
+    aux_xy_weight:   float = 0.1     # weight on auxiliary MSE loss: ||W_aux h - (x_target, y_target)||^2
     device:          str   = "cpu"
     # early stopping — all counts are in print steps (1 step = print_every updates)
     # set stop_on_no_miss=0 to disable entirely
@@ -110,7 +141,8 @@ def train_supervised(model, env_fn, cfg: TrainConfig):
     model.to(cfg.device)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr, betas=(0.9, 0.999))
 
-    history = {k: [] for k in ("loss", "ce", "reg", "p_correct", "p_abort", "p_miss")}
+    history = {k: [] for k in ("loss", "ce", "reg", "fa_pen", "aux_xy",
+                                "p_correct", "p_abort", "p_miss", "fa_rate")}
 
     use_early_stop = cfg.stop_on_no_miss > 0
     # buffer stores one checkpoint per print step
@@ -122,7 +154,7 @@ def train_supervised(model, env_fn, cfg: TrainConfig):
     for upd in range(1, cfg.max_updates + 1):
         model.train()
 
-        x, y, mask, lengths = make_train_batch(
+        x, y, mask, fa, xy_true, xy_mask, lengths = make_train_batch(
             env_fn=env_fn,
             batch_size=cfg.batch_size,
             dt=int(model.dt),
@@ -136,28 +168,53 @@ def train_supervised(model, env_fn, cfg: TrainConfig):
 
         loss_ce  = masked_temporal_cross_entropy(logits, y, mask)
         loss_reg = l2_activity_and_weight_penalty(h_seq, model, cfg.l2_h, cfg.l2_w)
-        loss     = loss_ce + loss_reg
+
+        # Explicit FA penalty: mean release-probability inside distractor FA windows
+        fa_sum = fa.sum()
+        if fa_sum > 0:
+            p_release = F.softmax(logits, dim=-1)[..., 1]
+            loss_fa = (p_release * fa).sum() / fa_sum
+        else:
+            loss_fa = torch.zeros((), device=logits.device)
+
+        if cfg.aux_xy_weight > 0.0:
+            xy_pred = model.decode_xy(h_seq)    # [B, T, 2]
+            loss_aux = masked_spatial_mse(xy_pred, xy_true, xy_mask)
+        else:
+            loss_aux = torch.zeros((), device=logits.device)
+
+        loss = (
+            loss_ce
+            + cfg.fa_penalty_weight * loss_fa
+            + cfg.aux_xy_weight * loss_aux
+            + loss_reg
+        )
 
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
         optimizer.step()
 
-        stats = compute_trial_outcomes(decode_actions(logits), y, lengths)
+        stats = compute_trial_outcomes(decode_actions(logits), y, lengths, fa_window=fa)
 
-        history["loss"].append(float(loss))
-        history["ce"].append(float(loss_ce))
-        history["reg"].append(float(loss_reg))
+        history["loss"].append(loss.detach().item())
+        history["ce"].append(loss_ce.detach().item())
+        history["reg"].append(loss_reg.detach().item())
+        history["fa_pen"].append(loss_fa.detach().item())
+        history["aux_xy"].append(loss_aux.detach().item())
         history["p_correct"].append(stats["correct"])
         history["p_abort"].append(stats["abort"])
         history["p_miss"].append(stats["miss"])
+        history["fa_rate"].append(stats["fa_rate"])
 
         if upd % cfg.print_every == 0 or upd == 1:
+            fa_str = f"{stats['fa_rate']*100:5.1f}%" if stats["n_distractor_trials"] > 0 else "  n/a"
             print(
                 f"Upd {upd:5d}/{cfg.max_updates} | "
-                f"Loss {loss:.4f} | CE {loss_ce:.4f} | Reg {loss_reg:.4f} | "
-                f"p_abort {stats['abort']:.2f}  p_miss {stats['miss']:.2f}  "
-                f"p_corr {stats['correct']:.2f}"
+                f"Loss {loss.detach().item():.4f} | CE {loss_ce.detach().item():.4f} | "
+                f"FA_pen {loss_fa.detach().item():.4f} | Aux {loss_aux.detach().item():.4f} | "
+                f"hit {stats['correct']*100:5.1f}%  miss {stats['miss']*100:5.1f}%  abort {stats['abort']*100:5.1f}%  "
+                f"FA {fa_str} (n={stats['n_distractor_trials']})"
             )
 
             if use_early_stop:

@@ -3,21 +3,26 @@ CuedTargetWithDistractorsV3
 
 Observation (7,):
     [0] fixation
-    [1] cue_on
-    [2] cue_x        — cue position x, scaled by cue_strength
-    [3] cue_y        — cue position y, scaled by cue_strength
-    [4] stim_on
-    [5] stim_x       — stimulus position x, scaled by strength
-    [6] stim_y       — stimulus position y, scaled by strength
+    [1] cue_x         — cue x-coordinate (raw, not scaled)
+    [2] cue_y         — cue y-coordinate (raw)
+    [3] cue_strength  — cue amplitude (=cue_strength in cue epoch, else 0)
+    [4] stim_x        — stimulus x-coordinate (target or distractor)
+    [5] stim_y        — stimulus y-coordinate
+    [6] stim_strength — stimulus amplitude (target_strength / distractor_strength
+                        in the corresponding epoch, else 0)
 
-V3 vs V2: continuous spatial coordinates replace one-hot location channels.
-The cue is a near-central object; target/distractors are peripheral.
-Same direction identity (loc 1..4) shared by cue and target, different coords.
+The cue is a near-central object; target/distractors are peripheral. Same
+direction identity (loc 1..4) is shared by cue and target. Channels 1-3 and
+4-6 are consumed by the geometric Gaussian RF in BioLeakyRNNTopo (Chen &
+Gong 2022, Eq. 35). On-markers (cue_on, stim_on) are NOT used — the
+`strength` channels encode presence implicitly (=0 when absent).
 
 Action space: Discrete(2) — 0=hold, 1=release
 """
 
 import contextlib
+import math
+
 import numpy as np
 
 if not hasattr(np, "_no_nep50_warning"):
@@ -38,7 +43,9 @@ except ImportError:
 
 class CuedTargetWithDistractorsV3(TrialEnv):
 
-    # near-central cue positions (same quadrant as targets, closer to center)
+    # near-central cue positions (same quadrant as targets, closer to center).
+    # Wider than earlier versions (was +-0.10) so that cue identities are
+    # resolvable under the Gaussian RF input (rf_sigma=0.3) in BioLeakyRNNTopo.
     CUE_POS = {
         1: (-0.40,  0.40),
         2: ( 0.40,  0.40),
@@ -47,11 +54,15 @@ class CuedTargetWithDistractorsV3(TrialEnv):
     }
 
     # peripheral stimulus positions
+    # NOTE: kept inside the sheet (coords in [-1, +1]) so the Gaussian RF
+    # drive (sigma=0.3) is not truncated at the edge. With +-0.7 there is
+    # ~1 sigma of buffer on each side, giving all 4 corners a symmetric,
+    # equal-strength drive profile.
     STIM_POS = {
-        1: (-1.00,  1.00),
-        2: ( 1.00,  1.00),
-        3: (-1.00, -1.00),
-        4: ( 1.00, -1.00),
+        1: (-0.70,  0.70),
+        2: ( 0.70,  0.70),
+        3: (-0.70, -0.70),
+        4: ( 0.70, -0.70),
     }
 
     def __init__(
@@ -78,6 +89,11 @@ class CuedTargetWithDistractorsV3(TrialEnv):
         distractor_hazard_late=0.01,
         allow_fa_overlap_with_target_epoch=True,
         strict_fa_scoring=True,
+        # --- continuous-location mode (opt-in; default False preserves legacy behaviour) ---
+        continuous_locations=False,
+        cue_radius=0.4,
+        target_radius=0.7,
+        distractor_min_sep_rad=math.pi / 3,
     ):
         super().__init__(dt=dt)
 
@@ -105,6 +121,11 @@ class CuedTargetWithDistractorsV3(TrialEnv):
         self.allow_fa_overlap_with_target_epoch = bool(allow_fa_overlap_with_target_epoch)
         self.strict_fa_scoring = bool(strict_fa_scoring)
 
+        self.continuous_locations     = bool(continuous_locations)
+        self.cue_radius               = float(cue_radius)
+        self.target_radius            = float(target_radius)
+        self.distractor_min_sep_rad   = float(distractor_min_sep_rad)
+
         self.timing = {
             "fixation": self.fixation_jitter,
             "cue": self.cue_duration,
@@ -117,8 +138,6 @@ class CuedTargetWithDistractorsV3(TrialEnv):
 
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(7,), dtype=np.float32)
         self.action_space = spaces.Discrete(2)
-
-    # ------------------------------------------------------------------ helpers
 
     def _sample_ctoa_ms(self):
         lo, hi = self.ctoa_range
@@ -160,38 +179,90 @@ class CuedTargetWithDistractorsV3(TrialEnv):
     def _set_fixation_channel(self):
         self.ob[:, 0] = 1.0
 
-    def _write_cue_epoch(self, cue_loc):
+    def _write_cue_epoch(self, cue_xy):
+        """cue_xy: (cx, cy) position tuple."""
         if self.cue_strength == 0.0:
             return
         t0, t1 = self.start_ind["cue"], self.end_ind["cue"]
-        cx, cy = self.CUE_POS[cue_loc]
-        self.ob[t0:t1, 1] = 1.0
-        self.ob[t0:t1, 2] = self.cue_strength * cx
-        self.ob[t0:t1, 3] = self.cue_strength * cy
+        cx, cy = cue_xy
+        self.ob[t0:t1, 1] = cx
+        self.ob[t0:t1, 2] = cy
+        self.ob[t0:t1, 3] = self.cue_strength
 
-    def _write_target_epoch(self, target_loc):
+    def _write_target_epoch(self, target_xy):
+        """target_xy: (sx, sy) position tuple."""
         if self.target_strength == 0.0:
             return
         t0, t1 = self.start_ind["target"], self.end_ind["target"]
-        sx, sy = self.STIM_POS[target_loc]
-        self.ob[t0:t1, 4] = 1.0
-        self.ob[t0:t1, 5] = self.target_strength * sx
-        self.ob[t0:t1, 6] = self.target_strength * sy
+        sx, sy = target_xy
+        self.ob[t0:t1, 4] = sx
+        self.ob[t0:t1, 5] = sy
+        self.ob[t0:t1, 6] = self.target_strength
 
-    def _write_distractor_epoch(self, onset_step, offset_step, d_loc):
+    def _write_distractor_epoch(self, onset_step, offset_step, d_xy):
+        """d_xy: (sx, sy) position tuple."""
         if self.distractor_strength == 0.0:
             return
-        sx, sy = self.STIM_POS[d_loc]
-        self.ob[onset_step:offset_step, 4] = 1.0
-        self.ob[onset_step:offset_step, 5] = self.distractor_strength * sx
-        self.ob[onset_step:offset_step, 6] = self.distractor_strength * sy
+        sx, sy = d_xy
+        self.ob[onset_step:offset_step, 4] = sx
+        self.ob[onset_step:offset_step, 5] = sy
+        self.ob[onset_step:offset_step, 6] = self.distractor_strength
 
-    # ------------------------------------------------------------------ trial
+    def _sample_cue_target_theta(self):
+        """Uniform angle on the ring, θ ∈ [0, 2π)."""
+        return float(self.rng.uniform(0.0, 2.0 * math.pi))
+
+    def _sample_distractor_theta(self, cue_theta, max_tries=64):
+        """
+        Sample θ_d ∈ [0, 2π) with wrapped angular distance to cue_theta
+        at least self.distractor_min_sep_rad. Falls back to the point farthest
+        from cue_theta if rejection sampling fails after max_tries (shouldn't
+        happen with min_sep < π).
+        """
+        two_pi = 2.0 * math.pi
+        for _ in range(max_tries):
+            t = float(self.rng.uniform(0.0, two_pi))
+            d = abs((t - cue_theta + math.pi) % two_pi - math.pi)
+            if d >= self.distractor_min_sep_rad:
+                return t
+        # fallback: opposite side
+        return (cue_theta + math.pi) % two_pi
+
+    @staticmethod
+    def _theta_to_quadrant(theta):
+        """
+        Map angle to legacy 1-4 location index. Convention aligned with
+        CUE_POS/STIM_POS:  1:(-,+), 2:(+,+), 3:(-,-), 4:(+,-).
+        """
+        x = math.cos(theta); y = math.sin(theta)
+        if   x <  0 and y >= 0: return 1
+        elif x >= 0 and y >= 0: return 2
+        elif x <  0 and y <  0: return 3
+        else:                   return 4
 
     def _new_trial(self, **kwargs):
-        cue_loc = int(self.rng.choice([1, 2, 3, 4]))
-        target_loc = cue_loc
-        uncued_locs = [l for l in [1, 2, 3, 4] if l != cue_loc]
+        # discrete vs continuous location sampling
+        if self.continuous_locations:
+            cue_theta = self._sample_cue_target_theta()
+            target_theta = cue_theta   # target is co-located with cue on the ring
+            cue_pos    = (self.cue_radius    * math.cos(cue_theta),
+                          self.cue_radius    * math.sin(cue_theta))
+            target_pos = (self.target_radius * math.cos(target_theta),
+                          self.target_radius * math.sin(target_theta))
+            # back-compat indices (nearest of 4 quadrants) for code that buckets
+            # trials by loc; the authoritative info is in cue_pos/target_pos/θ.
+            cue_loc    = self._theta_to_quadrant(cue_theta)
+            target_loc = cue_loc
+            uncued_locs = None  # not used in continuous mode
+        else:
+            cue_loc    = int(self.rng.choice([1, 2, 3, 4]))
+            target_loc = cue_loc
+            uncued_locs = [l for l in [1, 2, 3, 4] if l != cue_loc]
+            cue_pos    = self.CUE_POS[cue_loc]
+            target_pos = self.STIM_POS[target_loc]
+            # derive θ from the discrete position for a uniform trial interface
+            cue_theta    = math.atan2(cue_pos[1],    cue_pos[0])
+            target_theta = math.atan2(target_pos[1], target_pos[0])
 
         ctoa_ms = self._sample_ctoa_ms()
         ctoa_bin = self._compute_ctoa_bin(ctoa_ms)
@@ -200,12 +271,18 @@ class CuedTargetWithDistractorsV3(TrialEnv):
         trial = {
             "cue_loc": cue_loc,
             "target_loc": target_loc,
+            "cue_pos": cue_pos,
+            "target_pos": target_pos,
+            "cue_theta": cue_theta,
+            "target_theta": target_theta,
             "valid": True,
             "ctoa_ms": ctoa_ms,
             "ctoa_bin": ctoa_bin,
             "has_distractors": False,
             "n_distractors": 0,
             "distractor_locs": [],
+            "distractor_positions": [],
+            "distractor_thetas": [],
             "distractor_onsets_steps": [],
             "distractor_cdoa_ms": [],
             "first_distractor_cdoa_ms": None,
@@ -221,8 +298,8 @@ class CuedTargetWithDistractorsV3(TrialEnv):
         self.gt = np.zeros(T, dtype=np.int64)
 
         self._set_fixation_channel()
-        self._write_cue_epoch(cue_loc)
-        self._write_target_epoch(target_loc)
+        self._write_cue_epoch(cue_pos)
+        self._write_target_epoch(target_pos)
 
         cue_start   = self.start_ind["cue"]
         delay_start = self.start_ind["delay"]
@@ -261,12 +338,29 @@ class CuedTargetWithDistractorsV3(TrialEnv):
             distractor_onsets = []
 
         distractor_locs = []
+        distractor_positions = []
+        distractor_thetas = []
         for d0 in distractor_onsets:
             d1 = min(d0 + dur_steps, T)
-            d_loc = int(self.rng.choice(uncued_locs))
-            distractor_locs.append(d_loc)
 
-            self._write_distractor_epoch(d0, d1, d_loc)
+            # Geometric "not-near-cue" criterion:
+            # - discrete mode: pick from the 3 non-cued corners (angular separation ≥ π/2)
+            # - continuous mode: sample θ_d with |Δθ| ≥ distractor_min_sep_rad from cue
+            if self.continuous_locations:
+                d_theta = self._sample_distractor_theta(cue_theta)
+                d_pos   = (self.target_radius * math.cos(d_theta),
+                           self.target_radius * math.sin(d_theta))
+                d_loc   = self._theta_to_quadrant(d_theta)  # back-compat quadrant
+            else:
+                d_loc   = int(self.rng.choice(uncued_locs))
+                d_pos   = self.STIM_POS[d_loc]
+                d_theta = math.atan2(d_pos[1], d_pos[0])
+
+            distractor_locs.append(d_loc)
+            distractor_positions.append(d_pos)
+            distractor_thetas.append(d_theta)
+
+            self._write_distractor_epoch(d0, d1, d_pos)
             self._distractor_mask[d0:d1] = True
 
             fa0 = int(np.clip(d0 + rt0, 0, T))
@@ -289,6 +383,10 @@ class CuedTargetWithDistractorsV3(TrialEnv):
             trial["has_distractors"] = True
             trial["n_distractors"] = len(distractor_onsets)
             trial["distractor_locs"] = [int(x) for x in distractor_locs]
+            trial["distractor_positions"] = [
+                (float(p[0]), float(p[1])) for p in distractor_positions
+            ]
+            trial["distractor_thetas"] = [float(t) for t in distractor_thetas]
             trial["distractor_onsets_steps"] = [int(x) for x in distractor_onsets]
             trial["distractor_cdoa_ms"] = [int((d - cue_start) * self.dt) for d in distractor_onsets]
             trial["first_distractor_cdoa_ms"] = int(trial["distractor_cdoa_ms"][0])
@@ -300,8 +398,6 @@ class CuedTargetWithDistractorsV3(TrialEnv):
         trial["stimulus_types"].append("target")
 
         return trial
-
-    # ------------------------------------------------------------------ step
 
     def _step(self, action):
         t = self.t_ind
