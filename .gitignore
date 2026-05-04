@@ -32,11 +32,3 @@ Thumbs.db
 # Data
 data/
 results/
-
-# Generated output
-figures/
-report_*
-amengual_paper_text.txt
-
-# Docs (local notes, chat logs)
-docs/
