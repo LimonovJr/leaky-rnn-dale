@@ -1,34 +1,31 @@
 # Leaky RNN with Dale's Law
 
-Biologically-constrained leaky RNN trained on a cued visuospatial detection task.
-Implements E/I split, Dale's law, sparse connectivity masks, and recurrent noise scaling.
+Biologically-constrained leaky RNN trained on a cued visuospatial detection task (target + distractors, variable CTOA). Implements E/I split, Dale's law, sparse connectivity, and recurrent noise. Reproduces rotational dynamics reported in Amengual et al.
 
-## Model
+## Models
 
-```
-h_{t+1} = (1 - α) h_t + α · φ(W_rec_eff h_t + W_in_eff x_t + b_h + ξ_t)
-α = dt / τ,   ξ_t ~ N(0, σ_eff²),   σ_eff = √(2/α) · σ_rec
-```
+**BioLeakyRNN** (`src/model.py`) — base model. Recurrent layer with E/I sign constraints enforced via a fixed `ei_sign` vector on `W_rec`. Trained in three stages: target-only → add cue → add distractors with early stopping.
 
-`W_rec` stores unsigned magnitudes; a fixed `ei_sign` vector (+1/−1) enforces per-sender
-sign constraints throughout training.
+**BioLeakyRNNTopo** (`src/model_topo.py`) — topographic variant. Neurons arranged on a 2D sheet (12×12 E, random I). Input connections are frozen Gaussian receptive fields; recurrent connectivity falls off with sheet distance. Forces the network to use spatial structure rather than timing shortcuts.
 
-## Task
+## Notebooks
 
-`CuedTargetWithDistractorsV3` — cued visuospatial detection with distractors.
-
-Input `(7,)`: fixation, cue_on, cue (x,y), stim_on, stimulus (x,y).
-
-Trial: fixation → cue (350 ms) → delay (Beta(2.2,1.6) → [1000, 3300] ms)
-       → target (100 ms) → post-target (900 ms).
-
-## Training
-
-| Stage | cue_strength | p_distractor | Stopping |
-|-------|-------------|--------------|----------|
-| 0     | 0.0         | 0.0          | 1000 updates |
-| 1     | 1.0         | 0.0          | 1000 updates |
-| 2     | 1.0         | 0.6          | early stop (p_miss=0 for 3 steps, 5-step rollback) |
+| | |
+|---|---|
+| `01b_train_v2` | Train base model (3-stage curriculum) |
+| `01c_train_topo` | Train topographic model |
+| `02_analysis` | PCA, dPCA, spatial separation — base model |
+| `02b_analysis_topo` | Same analysis on topographic checkpoint |
+| `03c_jpca_dims` | jPCA: compare 3- vs 6-dim subspace (Amengual vs Churchland) |
+| `03d_jpca_dims_topo` | jPCA on topographic checkpoint |
+| `04_tangling` | Trajectory tangling by CTOA bin — base model |
+| `04b_tangling_topo` | Tangling on topographic checkpoint |
+| `05b_oscillations_v2` | Oscillatory modes: W_rec eigenspectrum, Jacobian, Welch PSD, jPCA frequency |
+| `05c_oscillations_topo` | Same oscillation analysis on topographic checkpoint |
+| `05_spatial_analysis_topo` | Spatial coding: activity maps, linear decoders, ablations |
+| `06_stimulus_degradation` | Robustness under degraded cue / target / noise |
+| `07b_decoding_v2` | Decode target location across time; correlate tangling with RT |
+| `09_topo_diagnostics` | Topographic model diagnostics: lesion tests, selectivity, sheet-map |
 
 ## Installation
 
@@ -37,26 +34,4 @@ conda create -n rnn-env python=3.10 -y && conda activate rnn-env
 pip install torch --index-url https://download.pytorch.org/whl/cu128
 pip install "neurogym @ git+https://github.com/neurogym/neurogym.git"
 pip install numpy matplotlib scikit-learn
-```
-
-Training runs on CPU by default (faster than GPU for `hidden_size=128`).
-
-## Layout
-
-```
-src/
-  env.py          CuedTargetWithDistractorsV3
-  model.py        BioLeakyRNN (Dale's law, E/I split)
-  model_topo.py   topographic variant with 2D spatial sheet
-  training.py     TrainConfig, curriculum loop, early stopping
-  dataset.py      trial rollout, batch padding
-  analysis.py     PCA, dPCA, jPCA, decoding, tangling
-  plotting.py     visualisation helpers
-notebooks/
-  01b_train_v2.ipynb     training (base model)
-  01c_train_topo.ipynb   training (topographic)
-  02_analysis.ipynb      PCA / dPCA
-  03c_jpca_dims.ipynb    jPCA dimensionality
-  04_tangling.ipynb      trajectory tangling
-  07b_decoding_v2.ipynb  linear decoding
 ```
