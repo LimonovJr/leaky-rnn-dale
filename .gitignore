@@ -32,3 +32,16 @@ Thumbs.db
 # Data
 data/
 results/
+
+# Local utility scripts (not part of public API)
+build_analysis_nb.py
+build_pdf_report.py
+diag_decoder.py
+diag_late_distractor_fa.py
+run_stage0.py
+scripts/build_topo_analysis_notebooks.py
+scripts/cleanup_notebooks.py
+scripts/gen_03c.py
+scripts/gen_05b.py
+scripts/rebuild_nb07.py
+scripts/strip_notebook_outputs.py
