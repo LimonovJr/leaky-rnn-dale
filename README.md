@@ -74,7 +74,7 @@ CPU is sufficient — and faster than GPU at this network size (`hidden_size≈1
    and run it top to bottom. Each notebook's first cell locates the repository root
    automatically, so it runs correctly from its subfolder.
 
-To retrain instead of downloading weights, start with the `train.ipynb` inside the
+To retrain instead of downloading weights, open `0_train_<model>.ipynb` inside the
 relevant model folder.
 
 ## Notebook pipeline
@@ -91,7 +91,7 @@ regenerates its figures into `figures/`.
 ### `1_rnn_baseline` — non-topographic baseline (BioLeakyRNN)
 | Notebook | Purpose |
 |---|---|
-| `train` | 3-stage curriculum training |
+| `0_train_baseline` | 3-stage curriculum training |
 | `state_space` | PCA trajectories, dPCA variance split |
 | `jpca` | jPCA rotational subspace (3 vs 6 PCA dims) |
 | `tangling` | Trajectory tangling vs CTOA, RT correlation |
@@ -102,8 +102,8 @@ regenerates its figures into `figures/`.
 ### `2_rnn_topo` — topographic model with Dale's law (BioLeakyRNNTopo) ← main model
 | Notebook | Purpose |
 |---|---|
-| `train` | 3-stage curriculum training on topographic architecture |
-| `pretrain_finetune` | Spatial pretraining on a simpler environment, then fine-tune |
+| `0_train_topo` | 3-stage curriculum training on topographic architecture |
+| `1_train_topo_pretrained` | Spatial pretraining on a simpler environment, then fine-tune |
 | `state_space` | PCA trajectories, dPCA variance split |
 | `jpca` | jPCA rotational subspace (3 vs 6 PCA dims) |
 | `tangling` | Trajectory tangling vs CTOA, RT correlation |
@@ -115,7 +115,7 @@ regenerates its figures into `figures/`.
 ### `3_rnn_topo_spatial` — topographic model with 2D spatial output
 | Notebook | Purpose |
 |---|---|
-| `train` | Training with continuous 2D readout instead of go/no-go |
+| `0_train_topo_spatial` | Training with continuous 2D readout instead of go/no-go |
 | `state_space` | PCA/dPCA for the spatial-output variant |
 | `tangling` | Trajectory tangling vs CTOA |
 | `spatial_activity` | Activity maps and decoder for spatial-output model |
@@ -124,13 +124,13 @@ regenerates its figures into `figures/`.
 ### `4_rnn_topo_discrete` — topographic model with 4 discrete target locations
 | Notebook | Purpose |
 |---|---|
-| `train` | Training on discrete 4-quadrant locations |
+| `0_train_topo_discrete` | Training on discrete 4-quadrant locations |
 | `dimensionality_evolution` | Tangling and dimensionality evolution (discrete variant) |
 
 ### `5_rnn_sameloc` — topographic model, cue and target at the same location
 | Notebook | Purpose |
 |---|---|
-| `train` | Training where cue position predicts exact target position |
+| `0_train_sameloc` | Training where cue position predicts exact target position |
 | `state_space` | PCA/dPCA, location selectivity |
 | `dynamics` | Tangling, PR, dPCA split for the sameloc model |
 | `position_coding` | Per-neuron position tuning, difference maps, normalization |
