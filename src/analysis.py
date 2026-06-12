@@ -900,7 +900,7 @@ def jpca_permutation_test(X_cond, n_perms=100, pca_dims=6, n_jpcs=1, seed=0):
 
 def jpca_permutation_test_condition_shuffle(X_cond, n_perms=100, pca_dims=6, n_jpcs=1, seed=0):
     """
-    Permutation test: shuffle conditions per neuron (preserves
+    Condition-shuffle permutation test: shuffle conditions per neuron (preserves
     temporal structure, destroys condition-identity association).
     Returns same dict structure as jpca_permutation_test.
     """
@@ -974,7 +974,7 @@ def pr_singletrial_by_ctoa_bin(trials, align_key="target_onset",
     each bin reports PR of that bin's single-trial projections
     concatenated. Trial-to-trial variability contributes spectral mass
     off PC1, so PR magnitude reflects population-level dimensionality
-    closer to single-trial population analyses.
+    closer to single-trial population analyses in the paper.
     """
     by_bin = defaultdict(list)
     for tr in trials:

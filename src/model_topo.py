@@ -11,7 +11,7 @@ Sheet layout
   "N_E excitatory neurons are located at integer coordinates and N_I inhibitory
   neurons are uniformly randomly distributed on the plane").
 - exc_ratio = N_E / (N_E + N_I). With sheet_side=12 and exc_ratio=0.80 this yields
-  144 E + 36 I = 180 neurons (a 4:1 E/I ratio).
+  144 E + 36 I = 180 neurons, matching the paper's 4:1 E/I ratio.
 
 Input channels (input_size=7)
 -----------------------------
@@ -34,8 +34,8 @@ Distance-dependent probabilistic mask (same form as Chen & Gong Eq.6):
     p_ij = exp(-D_ij / tau_class(i,j)),
 where tau_* are expressed in the SAME coordinate units as the sheet — i.e.,
 lengths in [-1, +1]^2. Defaults (tau_ee=0.25, tau_ie=0.32, tau_ei=0.64,
-tau_ii=0.64) approximate the Chen & Gong distance-decay ratios (D_EE=59.2um,
-D_IE=74um, D_EI=D_II=148um on a ~466um sheet).
+tau_ii=0.64) approximate the paper's ratios (D_EE=59.2um, D_IE=74um,
+D_EI=D_II=148um on a ~466um sheet).
 """
 
 import math

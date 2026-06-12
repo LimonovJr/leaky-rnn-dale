@@ -433,10 +433,10 @@ def plot_tangling_timecourses(tang_pre, tang_post=None, dt=20.0, figsize=(8, 5),
     Q(t) per CTOA bin.
 
     Pass both tang_pre and tang_post to get a single stitched time course
-    (pre-target window + post-target window joined at t=0). If tang_post is
-    None, only the pre-target window is shown.
+    (pre-target window + post-target window joined at t=0), exactly like
+    the paper figure. If tang_post is None, only the pre-target window is shown.
 
-    Color: light cyan (early CTOA) → dark navy (late CTOA), Blues colormap.
+    Color: light cyan (early CTOA) → dark navy (late CTOA), matching paper Blues.
     Background forced white regardless of notebook theme.
     """
     if tang_post is not None:
@@ -863,7 +863,7 @@ def plot_decoding_timecourse(trials, align_key="target_onset",
 
 def plot_decoding_vs_ctoa_overlay(dec_pre, dec_post, figsize=(5.5, 5),
                                   as_percent=True):
-    """Single-panel decoding-vs-CTOA with pre- and post-target windows overlaid.
+    """Single-panel decoding accuracy vs CTOA.
 
     Both windows on one axis so they're directly comparable: pre-target = circles,
     post-target = squares, points colored by CTOA (light=early -> dark=late) on a
